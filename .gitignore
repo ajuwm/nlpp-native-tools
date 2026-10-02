@@ -1,0 +1,33 @@
+# 游戏资源，绝对不要提交
+*.bin
+*.mot
+*.smes
+*.smat
+*.texi
+*.bone
+*.trb
+*.dbin2
+*.bclim
+*.bclyt
+*.bclan
+*.jpg
+*.png
+game/
+romfs/
+dump/
+
+# 提取出的文本（含游戏内容，不要提交）
+*.tsv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
