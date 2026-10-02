@@ -213,6 +213,7 @@ python quickstart.py --img img.bin --motion m_00010_40.mot --time 20 \
 ```
 quickstart.py           ★ 从这开始：最小可跑示例
 requirements.txt
+docs/JOURNEY.md         ★ 开发历程：走过的弯路与错误模式
 
 native/                 ── 核心库 + 常用工具 ──
   nlp_pack.py           容器读取（img.bin / PACK / SERI）
@@ -288,6 +289,8 @@ pose = MOT.sample_present(mot, t)               # {bone: {'T': {...}, 'R': {...}
 - **身体动作 ↔ 分层变体的配对规则不在 `code.bin`，也不在 `.dbin2` 明文里**
 
 **如果你解过这个游戏的动画系统，或者知道动作配对的规则，欢迎开 issue。**
+
+接手前建议先读 [docs/JOURNEY.md](docs/JOURNEY.md) —— 里面列了**已经试过并失败**的方向（15 个 upper 层、配对偏移扫描、绝对/相对语义、轴排列……），可以省掉重复劳动。
 
 ---
 
