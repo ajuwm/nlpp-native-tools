@@ -160,37 +160,116 @@ code.bin              8,126,464 字节明文 ARM，VA = 文件偏移 + 0x100000
 
 ---
 
-## 四、代码
+## 四、怎么用
 
-```
-native/
-  nlp_pack.py      容器读取（img.bin / PACK / SERI）
-  nlp_model.py     模型、骨骼、材质、纹理
-  nlp_mot.py       ★ .mot 解析与采样（步长、通道、骨骼表、插值）
-  nlp_render.py    软件光栅器（固定相机、蒙皮、背景合成）
-  nlp_bg.py        背景加载
-  compose.py       角色装配与图层定义
-  sweep_body.py    多帧扫描（固定相机，输出接触表）★ 最可靠的验证工具
-  anim.py          动画渲染 → PNG + GIF
-  dis_arm.py       ARM 反汇编辅助（VA ↔ 偏移、常量搜索）
-  bone_owner.py    骨→网格归属实测
-  upper_sweep.py   15 个 upper 层评分
-  ...
+### 4.1 安装
+
+```bash
+pip install -r requirements.txt      # numpy + Pillow（capstone 只有反汇编脚本需要）
 ```
 
-**最小可用示例：**
+**你还需要自备游戏本体的 `img.bin`**（本仓库不含任何游戏数据）。
+
+### 4.2 跑起来（30 秒）
+
+```bash
+python quickstart.py --img /path/to/img.bin --out frame.png
+```
+
+输出：
+
+```
+[1/5] 读取模型 ...      38 个部件, 254 根骨骼
+[2/5] 计算绑定姿势 ...
+[3/5] 采样动作 ...      （未指定动作时渲染绑定姿势）
+[4/5] 蒙皮 ...
+[5/5] 渲染 ...          -> frame.png
+```
+
+**带动作和背景：**
+
+```bash
+python quickstart.py --img img.bin --motion m_00010_40.mot --time 20 \
+                     --bg bs_0000_00_00.jpg --yaw 30 --out step.png
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--img` | 游戏本体 `img.bin`（必需） |
+| `--motion` | 动作名，如 `m_00010_40.mot`；省略则渲染绑定姿势 |
+| `--time` | 帧号 |
+| `--bg` | 背景名，如 `bs_0000_00_00.jpg` |
+| `--yaw` | 相机水平角（度） |
+| `--size` | 输出尺寸，默认 `600x860` |
+
+`quickstart.py` 只有 5 步、约 150 行，**是理解整条链路的入口**：
+
+```
+读模型 → 绑定姿势（相机按它取景一次，全程固定）→ 采样动作 → 蒙皮 → 渲染
+```
+
+### 4.3 目录结构
+
+```
+quickstart.py           ★ 从这开始：最小可跑示例
+requirements.txt
+
+native/                 ── 核心库 + 常用工具 ──
+  nlp_pack.py           容器读取（img.bin / PACK / SERI）
+  nlp_model.py          模型 / 骨骼 / 材质
+  nlp_tex.py            纹理解码（5 种格式）
+  nlp_mot.py            ★ .mot 解析与采样（步长、通道、骨骼表、插值）
+  nlp_render.py         软件光栅器（固定相机、蒙皮、背景合成）
+  nlp_bg.py             背景加载
+  compose.py            角色装配 + 图层定义
+
+  sweep_body.py         ★ 多帧扫描 → 接触表（最可靠的验证工具）
+  anim.py               动画 → PNG + GIF
+  motion_sheet.py       多个动作并排对比
+  showcase.py           带背景的成品渲染
+
+diagnostics/            ── 一次性排查脚本（证据链，不是使用入口）──
+  dis_arm.py            ARM 反汇编辅助（VA ↔ 偏移、常量搜索）
+  bone_owner.py         骨骼 → 网格归属实测
+  arm_bones.py          手臂顶点绑定哪些骨骼
+  layer_overlap.py      图层之间的骨骼争用
+  upper_sweep.py        15 个 upper 层评分
+  region_motion.py      分部位位移
+  table_validate.py     记录 → 骨骼表验证
+  shift_scan.py         记录↔骨骼配对偏移扫描
+  absolute_layers.py    分层动作绝对/相对语义对照
+```
+
+> `diagnostics/` 里的脚本记录了每个结论是**怎么被证伪或证实的**。
+> 如果你要接手骨骼语义问题，读这些比读格式说明更有用 —— 它们包含我走过的弯路。
+
+### 4.4 常用命令
+
+```bash
+# 多帧扫描一个动作（最可靠的验证方式）
+LP_SWEEP_MOTION=m_00010_40.mot python native/sweep_body.py
+
+# 动画 GIF
+LP_ANIM_MOTION=m_00010_40.mot LP_ANIM_FRAMES=48 python native/anim.py
+
+# 多个动作并排
+python native/motion_sheet.py
+```
+
+### 4.5 作为库使用
 
 ```python
+import sys; sys.path.insert(0, 'native')
 import nlp_pack as N, nlp_model as M, nlp_mot as MOT, nlp_render as R
 
-IMG = 'img.bin'
-model = M.load_model(IMG, 'm_01_012')        # 服装
-mot   = MOT.load_mot_final(raw_bytes, 'm_00010_40.mot')
-pose  = MOT.sample_present(mot, t)
-...                                          # 见 anim.py
-```
+model = M.load_model('img.bin', 'm_01_012')     # 服装
+objs, bones = ..., model.bones
 
----
+MOT.BIND_ROT = {b.index: tuple(b.rotation) for b in bones}
+mot  = MOT.load_mot_final(raw_bytes, 'm_00010_40.mot')
+pose = MOT.sample_present(mot, t)               # {bone: {'T': {...}, 'R': {...}}}
+# 之后见 quickstart.py 第 4~5 步
+```
 
 ## 五、给社区的话
 

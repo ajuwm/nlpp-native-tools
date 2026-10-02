@@ -1,0 +1,6 @@
+# 核心依赖（只有三个）
+numpy>=1.24
+Pillow>=10.0
+
+# 仅 dis_arm.py（ARM 反汇编辅助）需要，不装也不影响渲染
+capstone>=5.0
