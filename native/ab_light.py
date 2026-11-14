@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Showcase render: one still (PNG) and one animation (GIF), both with a real game
-background, so the current state can be judged by eye.
+r"""ab_light.py — 光照 A/B 渲染：LPW 现有拟合光照 vs 实机真值（Citra 读出）
 
-    python showcase.py
+    # 现有拟合光照（LPW 默认参数）
+    python ab_light.py
+    # 实机真值（2 盏灯 + 真实 ambient，来自 out/live/live_lights.json）
+    set LP_LIGHTS_JSON=..\out\live\true_lights_env.json
+    python ab_light.py
 
-Writes  out/showcase.png  and  out/showcase.gif
-Everything is the game's own data: .smes / .smat / .bone / .texi / .mot / .jpg.
+输出：out/ab/ab_<name>.png（名字由 LP_AB_NAME 指定）
+模型/贴图/动作/背景全部来自工作区 data/img.bin（游戏原始数据）。
 """
 import io
 import os
@@ -22,12 +25,36 @@ import nlp_render as R        # noqa: E402
 import nlp_bg                 # noqa: E402
 from compose import character_parts, LAYERS   # noqa: E402
 
-IMG = r'D:/dsh/nlpp/img.bin'
-OUT = r'D:/dsh/nlpp/out'
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
+IMG = os.path.join(_ROOT, 'data', 'img.bin')
+OUT = os.path.join(_ROOT, 'nlpp-re', 'out', 'ab')
+os.makedirs(OUT, exist_ok=True)
 
 CHAR, HAIR, OUTFIT = 'm', 'm_00_200', 'm_01_012'
 BACKGROUND = 'bs_0000_00_00.jpg'
 MOTION = os.environ.get('LP_SHOW_MOTION', 'm_00000_40.mot')
+
+# 打印当前使用的光照，便于确认 A/B 身份
+try:
+    _l = R.LIGHTS
+    print('[AB] shade_mode=%s  multi=%s' % (R.SHADE_MODE,
+          'None' if getattr(_l, 'multi', None) is None else len(_l.multi)))
+    print('[AB] ambient=%s' % (np.round(_l.ambient, 4),))
+    if getattr(_l, 'multi', None):
+        for i, lt in enumerate(_l.multi):
+            print('[AB]   light%d dir=%s color=%s spec=%s' %
+                  (i, np.round(lt['dir'], 4), np.round(lt['color'], 4),
+                   np.round(lt['spec'], 4)))
+    else:
+        print('[AB] light_dir=%s light_color=%s spec_color=%s' %
+              (np.round(_l.light_dir, 4), np.round(_l.light_color, 4),
+               np.round(_l.spec_color, 4)))
+    print('[AB] out_tint=%s fresnel=%.3f spec=%.3f difcloth=%.3f' %
+          (np.round(_l.out_tint, 4), _l.fresnel_strength, _l.spec_strength,
+           float(os.environ.get('LP_DIFFCLOTH', 0.45))))
+except Exception as _e:
+    print('[AB] lighting info error:', _e)
 
 # ---------------------------------------------------------------- geometry
 objs = []
@@ -152,18 +179,8 @@ def render(w, h, t, zoom=2.6):
 
 
 # ---------------------------------------------------------------- still
+name = os.environ.get('LP_AB_NAME', 'fitted')
 still = render(600, 860, 0)
-p1 = os.path.join(OUT, 'showcase.png')
+p1 = os.path.join(OUT, 'ab_%s.png' % name)
 still.save(p1)
-print('PNG -> %s' % p1)
-
-# ---------------------------------------------------------------- animation
-n_frames, step, fps = 48, 2, 15
-frames = []
-for i in range(n_frames):
-    im = render(340, 480, i * step)
-    frames.append(im.convert('P', palette=Image.ADAPTIVE, colors=128))
-p2 = os.path.join(OUT, 'showcase.gif')
-frames[0].save(p2, 'GIF', save_all=True, append_images=frames[1:],
-               duration=int(1000.0 / fps), loop=0, optimize=True)
-print('GIF -> %s  (%d frames, %d fps)' % (p2, n_frames, fps))
+print('[AB] PNG -> %s' % p1)

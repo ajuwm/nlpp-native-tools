@@ -263,37 +263,47 @@ _BIT_COMPONENT = {
     #   R0->y, R1->z, R2->x              visible 0.0117  height  8.3
     # A Y rotation on a limb that points down is a spin about the limb's own axis, which
     # is invisible -- that is why "height stays constant" on its own picked a bad answer.
-    5: ('R', 0), 4: ('R', 2), 3: ('R', 1),
+    5: ('R', 0), 4: ('R', 1), 3: ('R', 2),
     2: ('S', 0), 1: ('S', 1), 0: ('S', 2),
 }
+# 上面是「自然轴序」：bit8/7/6 -> T.x/y/z，bit5/4/3 -> R.x/y/z，bit2/1/0 -> S.x/y/z。
+# 早期版本把 bit4/bit3 映射成 R.z/R.y（用"高度保持不变"这个间接判据选的），
+# 在骨骼映射和条目宽度都修正之后，那个顺序会把手臂折到头顶；
+# 自然轴序得到的是手臂自然下垂的站姿。LP_ROLD=1 可切回旧顺序做对照。
+import os as _os0
+if _os0.environ.get('LP_ROLD'):
+    _BIT_COMPONENT.update({4: ('R', 2), 3: ('R', 1)})
+
+
+# 骨骼 ID -> 扁平骨骼号。渲染器装好骨骼后设置一次。
+# 所有部件的 .bone 共用同一张 ID 表（254 个 ID 互不相同，范围 ~10..322），
+# 所以一张表对整个游戏都成立。
+ID_TO_BONE = {}
 
 
 def _bone_of(bone_table, i, base, per):
-    """Record i's bone index.
+    """记录 i 的目标骨骼（扁平序号）。
 
-    The table read from header +0x0C holds  value = bank*256 + bone  (bank 0 or 1).
-    Evidence: across 402 body motions EVERY value satisfies  value % 256 < 254, which a
-    plain index could not do -- all 604 motions carry values >= 254.  A stride of exactly
-    one skeleton length (256) decomposes them all, e.g. m_00011_40's tail
-    [..., 270, 43, 274..288] -> bones [..., 14, 43, 18..32].
+    ★ header+0x0C 的表存的是**骨骼 ID**，不是骨骼下标，也不是「ID + 225*bank」。
 
-    `base`/`per` remain only as a fallback for files without a table.
+    证据链：
+      1. `.bone` 头部第三个字段（旧注为 unk_off）指向 u32[254] 表，`表[骨骼号] = ID`，
+         各部件**逐字节一致**（全局 ID 空间）。
+      2. `.mot` 的表值就落在这个 ID 空间里（274 / 303 / 137 …）。
+      3. 单关键帧记录存的是**绝对绑定平移**，与 ID 映射结果逐值吻合：
+         m_skirt_000 的 ID 303 -> 骨骼 6，其 T=(12.0,-2.8) 正是骨骼 6 的绑定平移；
+         ID 304/305/306 -> 236/237/238，ID 84 -> 242 …… 完全对应六片三段裙摆。
+
+    旧的 `v - 225 if v >= 225` 规则「看起来能用」，只是因为 m_hand000 的
+    ID 274..288 减 225 恰好落在左手的 49..63 —— 而真值是**右手** 210..224
+    （同样是 15 根连续骨，形状相同、对象不同）。
+    LP_IDMAP=0 可切回旧规则做对照。
     """
+    import os as _os
+    if bone_table and ID_TO_BONE and _os.environ.get('LP_IDMAP', '1') != '0':
+        return ID_TO_BONE.get(bone_table[i], 9999)
     if bone_table:
         v = bone_table[i]
-        # value = bone + 225*bank.  225 -- not 256 -- is the stride.  Proof: the hand
-        # layer m_hand000 has exactly the values [274..288], and 274-225 .. 288-225 =
-        # [49..63], which is precisely the run of hand bones the m_hand model is skinned
-        # to (33, 42, 49..63, 194).  m_lower011 -> 78..96 and m_skirt_000 -> 78..97 for
-        # the lower body and skirt.  Values below 225 are already bone indices.
-        # (A stride of 256 was tried earlier: it is structurally neat for the body
-        # motions but does not land the hand layer on the hand bones.)
-        import os as _os
-        want = _os.environ.get('LP_BANK')
-        bank = 1 if v >= 225 else 0
-        if want not in (None, ''):
-            if bank != int(want):
-                return 9999
         return v - 225 if v >= 225 else v
     return base + i // per
 
@@ -338,7 +348,13 @@ def channel_layout(bits, nk, bone=None, bind_x=None):
 
 def load_mot_final(data, name='motion', rot_degrees=False, base=0, per=1,
                    bones_bind=None):
-    """Parse a .mot with the verified rule. Returns a Motion."""
+    """Parse a .mot with the verified rule. Returns a Motion.
+
+    ★ 旋转值单位是**弧度**（渲染器 _rot_matrix 直接吃弧度）。
+      证据：m_31003_40 里上臂骨（骨骼 30）的旋转是 1.39~1.45，而绑定姿势是 T-pose；
+      1.4 rad ≈ 80°，正好是"手臂从水平垂到身侧"所需的角度 —— 按度解释时只有 1.4°
+      （画面上手臂纹丝不动），按圈解释（×360）则整个人扭曲。LP_ROT_SCALE 可覆盖。
+    """
     if data[:3] != b'MOT':
         raise ValueError('not a MOT file: %r' % data[:4])
     m = Motion(name)
@@ -363,7 +379,12 @@ def load_mot_final(data, name='motion', rot_degrees=False, base=0, per=1,
         bone_table = None
 
     offs = struct.unpack_from('<%dI' % count, data, 0x1C)
-    scale = math.pi / 180.0 if rot_degrees else 1.0
+    # ★ .mot 的旋转值也是**弧度**，而渲染器 nlp_render 收的是**度**。
+    #   默认做 弧度->度 的换算；rot_degrees=True 表示"保持弧度不换算"。
+    scale = 1.0 if rot_degrees else (180.0 / math.pi)
+    # LP_ROT_SCALE 可覆盖（做单位对照实验用）
+    import os as _os
+    scale *= float(_os.environ.get('LP_ROT_SCALE') or 1.0)
     # pool_a == 0 means there is no A pool (e.g. m_lower011); records still live below pool_b.
     rec_limit = pool_a if pool_a else pool_b
     for i in range(count):
@@ -381,52 +402,32 @@ def load_mot_final(data, name='motion', rot_degrees=False, base=0, per=1,
         # every mask observed so far but is not what the game does.
         bits = [b for b in range(9) if (mask >> b) & 1]
         nch = len(bits)
-        # Stride: how many floats one keyframe occupies in the pool.  Reading with
-        # stride nch interleaves two different quantities -- channel 0 then jumps to
-        # ~80.8 on every other keyframe and channels 1 and 2 come out identical:
-        #     stride 3, ch0: [-4.394, 80.811, -2.875, -0.045, 0.121, ...]
-        #     stride 6, ch0: [-4.394, -2.875,  0.121, -4.881, -2.817, ...]   smooth
-        # so a keyframe is 2*nch floats wide.  LP_MOT_STRIDE overrides for comparison.
-        import os as _os
-        stride = int(_os.environ.get('LP_MOT_STRIDE') or (2 * nch))
-        if stride < nch:
-            stride = nch
-        if nk == 0 or nch == 0 or body + 4 * nk * stride > len(data):
+        # ---- refs: 每条记录 nk*nch 个 u32（已由记录长度公式逐条确证）-----------
+        # ★ 两个池的元素宽度不同，这是全库统计出来的硬结论：
+        #     refs 全部指向 pool B 的记录 = 64277 条，**全部是 nk==1**
+        #     refs 指向 pool A 的记录   = 41574 条，**全部是 nk>1**
+        #   pool A : 3 浮点一个条目（值 + 两条切线）  -> 浮点偏移 = 3 * ref
+        #   pool B : 1 浮点一个条目                   -> 浮点偏移 = ref
+        # 混合记录里同一个通道会整条复用同一个 B 下标（常量通道），
+        # 动画通道则每帧取一个新的 A 条目。
+        if nk == 0 or nch == 0 or body + 4 * nk * nch > len(data):
             m.records.append(MotRecord(
                 _bone_of(bone_table, i, base, per),
                 nk, mask, times, [], []))
             continue
         bone = _bone_of(bone_table, i, base, per)
-        refs = list(struct.unpack_from('<%dI' % (nk * stride), data, body))
-        # The layout is FIXED by the game's dispatcher; there is no per-record axis
-        # choice and no `per>1` axis remap.  Those were workarounds for the wrong
-        # channel model (nch/3) and are gone.
+        refs = list(struct.unpack_from('<%dI' % (nk * nch), data, body))
         layout = channel_layout(bits, nk)
-        # Interleaving test.  The refs for a record are a CONTIGUOUS run of pool
-        # indices (0x19E,0x19F,0x1A0,...), but reading them with stride nch gives a
-        # alternating pattern -- channel 0 jumps to ~80.8 on every other keyframe and
-        # channels 1 and 2 are identical:
-        #     kf0 = (-4.394, -0.496, -0.496)
-        #     kf1 = ( 80.811, -0.020, -0.020)
-        #     kf2 = (-2.875,  0.059,  0.059)
-        # That is the signature of a wrong stride: sampling every 3rd element of an
-        # array whose real keyframe is 6 floats wide.  LP_MOT_STRIDE selects the stride
-        # so both readings can be compared.
-        import os as _os
-        stride = int(_os.environ.get('LP_MOT_STRIDE') or nch)
-        if stride < nch:
-            stride = nch
         cols, chans = [], []
         for comp, axis, off in layout:
             col = []
             ok = True
             for k in range(nk):
-                r = refs[k * stride + off]
+                r = refs[k * nch + off]
                 if r & 0x80000000:
-                    pbase, idx = pool_b, r & 0x7FFFFFFF
+                    o = pool_b + (r & 0x7FFFFFFF) * 4
                 else:
-                    pbase, idx = pool_a, r
-                o = pbase + idx * 4
+                    o = pool_a + r * 12          # ★ 条目宽 3 浮点
                 if o < 0 or o + 4 > len(data):
                     ok = False
                     break
@@ -445,10 +446,13 @@ def load_mot_final(data, name='motion', rot_degrees=False, base=0, per=1,
             bone = 9999
         m.records.append(MotRecord(bone, nk, mask, times, per_key, chans))
     m.duration = max((r.times[-1] for r in m.records if r.times), default=0.0)
-    # Layered motions (hand / lower / skirt) are made of single-keyframe records and
-    # store ABSOLUTE bone translations (verified: their values equal the bind pose, and
-    # treating them as deltas doubles the bind).  Body motions (nk>1) store DELTAS.
-    m.absolute_translation = all(r.count <= 1 for r in m.records if r.count)
+    # ★ 平移一律是**绝对位置**，不是增量。
+    # 证据：m_00010_40 记录 0（骨盆，骨骼 2）第一帧的 6 个通道读出来是
+    #   T=(7.48, 80.13, -4.28)   R=(-0.04, 0.18, 0.10)
+    # 而骨骼 2 的绑定平移是 (0, 80.91, 0.77) —— 80.13 正是"身高"，
+    # 只有当平移是绝对坐标时才讲得通。分层动作（nk==1）同样如此。
+    # 旧代码把 nk>1 的平移当增量加到绑定上，角色因此被抬高约一倍（悬空）。
+    m.absolute_translation = True
     return m
 
 

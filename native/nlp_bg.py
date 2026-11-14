@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nlp_pack as N          # noqa: E402
 
-IMG = os.environ.get('LP_IMG', r'D:/dsh/nlpp/img.bin')
+IMG = os.environ.get('LP_IMG', 'data/img.bin')
 _cache = {}
 
 
